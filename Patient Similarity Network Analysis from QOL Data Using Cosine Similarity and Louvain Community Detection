@@ -1,0 +1,69 @@
+# Import necessary libraries
+import pandas as pd
+import numpy as np
+import networkx as nx
+from sklearn.metrics.pairwise import cosine_similarity
+from community import community_louvain
+import matplotlib.pyplot as plt
+from google.colab import files
+from io import StringIO
+
+# Step 1: Upload the CSV file
+print("Please upload your CSV file:")
+uploaded = files.upload()
+
+# Step 2: Process the uploaded file
+for filename in uploaded.keys():
+    try:
+        # Load CSV into a DataFrame
+        data = pd.read_csv(StringIO(uploaded[filename].decode('utf-8')))
+
+        # Step 3: Check for the required column
+        patient_id_col = 'Patient Number'
+        if patient_id_col not in data.columns:
+            print(f"Error: Required column '{patient_id_col}' not found.")
+            break
+
+        # Step 4: Set patient number as index
+        data.set_index(patient_id_col, inplace=True)
+
+        # Step 5: Select columns related to QOL (containing 'EPIC' or 'QOL')
+        qol_columns = [col for col in data.columns if 'EPIC' in col or 'QOL' in col]
+        if not qol_columns:
+            print("No QOL-related columns (containing 'EPIC' or 'QOL') were found.")
+            break
+
+        qol_data = data[qol_columns]
+
+        # Step 6: Convert to numeric and impute missing values with column means
+        qol_data = qol_data.apply(pd.to_numeric, errors='coerce')
+        qol_data.fillna(qol_data.mean(), inplace=True)
+
+        # Step 7: Compute cosine similarity matrix
+        similarity_matrix = cosine_similarity(qol_data)
+
+        # Step 8: Construct similarity graph
+        G = nx.Graph()
+        for i, patient in enumerate(qol_data.index):
+            G.add_node(patient)
+
+        threshold = 0.6  # Similarity threshold (modifiable)
+        for i in range(len(qol_data)):
+            for j in range(i + 1, len(qol_data)):
+                if similarity_matrix[i, j] > threshold:
+                    G.add_edge(qol_data.index[i], qol_data.index[j], weight=similarity_matrix[i, j])
+
+        # Step 9: Remove isolated nodes (patients with no connections)
+        isolated_nodes = list(nx.isolates(G))
+        G.remove_nodes_from(isolated_nodes)
+
+        # Step 10: Detect communities using Louvain algorithm
+        partition = community_louvain.best_partition(G)
+        nx.set_node_attributes(G, partition, "community")
+
+        # Step 11: Compute node sizes based on degree
+        max_degree = max(dict(G.degree()).values()) if G.number_of_nodes() > 0 else 1
+        node_sizes = [300 + 300 * (G.degree(n) / max_degree) for n in G.nodes()]
+
+        # Step 12: Visualize the graph
+        pos = nx.spring_layout(G, seed_
