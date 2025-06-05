@@ -1,0 +1,69 @@
+# Required Libraries
+import pandas as pd
+import numpy as np
+import networkx as nx
+from sklearn.metrics.pairwise import cosine_similarity
+from community import community_louvain
+import matplotlib.pyplot as plt
+from io import StringIO
+
+# For Google Colab: Uncomment if running in Colab
+# from google.colab import files
+# print("Please upload your CSV file:")
+# uploaded = files.upload()
+# for filename in uploaded.keys():
+#     data = pd.read_csv(StringIO(uploaded[filename].decode('utf-8')))
+
+# For local Jupyter or direct import:
+# Replace 'your_file.csv' with the path to your CSV
+data = pd.read_csv("your_file.csv")  # <-- Change this to your actual filename
+
+# Ensure that the ID column exists
+id_col = "Patient_ID"  # Rename this if needed (original was '症例番号')
+if id_col not in data.columns:
+    raise ValueError(f"Column '{id_col}' not found in the dataset.")
+
+# Extract columns related to QOL (EPIC or QOL in the name)
+qol_columns = [col for col in data.columns if "EPIC" in col or "QOL" in col]
+
+# Subset and preprocess
+data = data.set_index(id_col)
+qol_data = data[qol_columns].apply(pd.to_numeric, errors='coerce')
+qol_data = qol_data.fillna(qol_data.mean())
+
+# Calculate pairwise cosine similarity
+similarity_matrix = cosine_similarity(qol_data)
+
+# Build similarity graph with thresholding
+threshold = 0.6
+G = nx.Graph()
+for i, node_i in enumerate(qol_data.index):
+    G.add_node(node_i)
+    for j in range(i + 1, len(qol_data)):
+        if similarity_matrix[i, j] > threshold:
+            G.add_edge(node_i, qol_data.index[j], weight=similarity_matrix[i, j])
+
+# Community detection using Louvain method
+partition = community_louvain.best_partition(G)
+nx.set_node_attributes(G, partition, "community")
+
+# Visualize the graph
+node_degrees = dict(G.degree())
+node_sizes = [300 + 300 * (node_degrees[n] / max(node_degrees.values())) for n in G.nodes()]
+pos = nx.spring_layout(G, seed=42)
+
+plt.figure(figsize=(12, 12))
+nx.draw_networkx_nodes(G, pos, node_size=node_sizes,
+                       node_color=list(partition.values()), cmap=plt.cm.Set1)
+nx.draw_networkx_edges(G, pos, alpha=0.2, edge_color='gray')
+plt.title("Patient Similarity Network (Threshold = 0.6)")
+plt.axis("off")
+plt.show()
+
+# Save the community assignment to CSV
+community_df = pd.DataFrame({
+    id_col: list(partition.keys()),
+    'Community': list(partition.values())
+})
+community_df.to_csv("qol_community_output.csv", index=False)
+print("CSV file with community assignments saved as 'qol_community_output.csv'.")
