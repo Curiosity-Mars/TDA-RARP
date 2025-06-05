@@ -1,0 +1,115 @@
+# Import required libraries
+import pandas as pd
+import numpy as np
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
+from google.colab import files
+import io
+
+# -------------------------------
+# Function: Upload and Read CSV
+# -------------------------------
+def upload_and_read_data():
+    print("Please upload your CSV file.")
+    uploaded = files.upload()
+    file_name = list(uploaded.keys())[0]
+    data = pd.read_csv(io.BytesIO(uploaded[file_name]))
+    return data
+
+# -------------------------------
+# Function: Feature Engineering
+# -------------------------------
+def preprocess_psa_data(data):
+    psa_columns = ['M1', 'M3', 'M6', 'M9', 'M12', 'M15', 'M18', 'M24', 'M30', 'M36']
+
+    # Convert PSA values to numeric (remove commas, handle errors)
+    for col in psa_columns:
+        data[col] = pd.to_numeric(data[col].astype(str).str.replace(',', ''), errors='coerce')
+
+    # Extract raw PSA matrix
+    psa_raw = data[psa_columns].values
+
+    # Compute relative change between timepoints
+    psa_changes = np.zeros((len(data), len(psa_columns) - 1))
+    for i in range(len(psa_columns) - 1):
+        denominator = psa_raw[:, i].copy()
+        denominator[denominator == 0] = np.nan
+        delta = (psa_raw[:, i + 1] - psa_raw[:, i]) / denominator
+        psa_changes[:, i] = np.nan_to_num(delta, nan=0, posinf=0, neginf=0)
+
+    # Compute max/min ratio (with divide-by-zero protection)
+    psa_min = psa_raw.min(axis=1)
+    psa_min[psa_min == 0] = np.nan
+    psa_ratio = psa_raw.max(axis=1) / psa_min
+    psa_ratio = np.nan_to_num(psa_ratio, nan=0, posinf=0, neginf=0)
+
+    # Combine features: raw PSA, delta%, and max/min ratio
+    combined_features = np.column_stack([psa_raw, psa_changes, psa_ratio.reshape(-1, 1)])
+    return combined_features
+
+# -------------------------------
+# Function: Analyze Data with LDA
+# -------------------------------
+def analyze_psa_data(data):
+    required_columns = ['Patient Number', 'Neoadjuvant hormone therapy',
+                        'M1', 'M3', 'M6', 'M9', 'M12', 'M15', 'M18', 'M24', 'M30', 'M36']
+    data = data[required_columns].dropna()
+
+    # Ensure therapy label is numeric
+    if data['Neoadjuvant hormone therapy'].dtype == 'object':
+        data['Neoadjuvant hormone therapy'] = pd.to_numeric(
+            data['Neoadjuvant hormone therapy'], errors='coerce')
+
+    # Step 1: Feature engineering
+    features = preprocess_psa_data(data)
+
+    # Step 2: Standardization
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features)
+
+    # Step 3: LDA projection (2D)
+    lda = LDA(n_components=2)
+    lda_result = lda.fit_transform(features_scaled, data['Neoadjuvant hormone therapy'])
+
+    # Step 4: Visualization
+    plt.figure(figsize=(10, 6))
+    scatter = plt.scatter(
+        lda_result[:, 0], lda_result[:, 1],
+        c=data['Neoadjuvant hormone therapy'],
+        cmap='coolwarm', alpha=0.7, edgecolor='k'
+    )
+    plt.colorbar(scatter, label='Neoadjuvant Hormone Therapy (0=No, 1=Yes)')
+    plt.title("LDA Projection of PSA Dynamics")
+    plt.xlabel("LDA Component 1")
+    plt.ylabel("LDA Component 2")
+    plt.tight_layout()
+    plt.show()
+
+    # Step 5: Save results to CSV
+    results_df = pd.DataFrame(lda_result, columns=['LDA1', 'LDA2'])
+    results_df['Neoadjuvant'] = data['Neoadjuvant hormone therapy'].values
+    output_file = "LDA_PSA_Results.csv"
+    results_df.to_csv(output_file, index=False)
+    print(f"\nLDA results saved to '{output_file}'.")
+    files.download(output_file)
+
+    # Return result (note: explained_ratio_ is not implemented in sklearn LDA)
+    return lda_result
+
+# -------------------------------
+# Main Execution
+# -------------------------------
+def main():
+    try:
+        data = upload_and_read_data()
+        lda_result = analyze_psa_data(data)
+        print("\nAnalysis completed successfully.")
+    except Exception as e:
+        print(f"\nError during analysis: {str(e)}")
+        print("Please ensure the data is correctly formatted and complete.")
+
+# Run the main function
+if __name__ == "__main__":
+    main()
