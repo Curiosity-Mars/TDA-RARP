@@ -1,0 +1,66 @@
+# Import required libraries
+import pandas as pd
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.preprocessing import StandardScaler
+import seaborn as sns
+import matplotlib.pyplot as plt
+from google.colab import files
+
+# Step 1: Upload the CSV file
+print("Please upload your CSV file:")
+uploaded = files.upload()
+file_name = list(uploaded.keys())[0]
+
+# Step 2: Load the dataset
+data = pd.read_csv(file_name)
+
+# Step 3: Fill missing values with column means
+data.fillna(data.mean(), inplace=True)
+
+# Step 4: Create class labels based on neoadjuvant hormone therapy
+if 'Neoadjuvant hormone therapy' not in data.columns:
+    raise ValueError("Column 'Neoadjuvant hormone therapy' not found in the dataset.")
+
+data['Label'] = data['Neoadjuvant hormone therapy'].map({0: 'No Neoadjuvant', 1: 'Neoadjuvant'})
+
+# Step 5: Select PSA timepoint columns
+psa_columns = ['M1', 'M3', 'M6', 'M9', 'M12', 'M15', 'M18', 'M24', 'M30', 'M36']
+features = data[psa_columns]
+
+# Step 6: Standardize the features
+scaler = StandardScaler()
+features_scaled = scaler.fit_transform(features)
+
+# Step 7: Perform PCA (2 components)
+pca = PCA(n_components=2)
+pca_result = pca.fit_transform(features_scaled)
+
+# Step 8: Perform LDA (1 component)
+lda = LDA(n_components=1)
+lda_result = lda.fit_transform(features_scaled, data['Neoadjuvant hormone therapy'])
+
+# Step 9: Plot the results
+fig, ax = plt.subplots(1, 2, figsize=(14, 6))
+
+# PCA plot
+sns.scatterplot(
+    x=pca_result[:, 0], y=pca_result[:, 1],
+    hue=data['Label'], palette='tab10', ax=ax[0], alpha=0.7
+)
+ax[0].set_title("PCA Scatter Plot")
+ax[0].set_xlabel("Principal Component 1")
+ax[0].set_ylabel("Principal Component 2")
+
+# LDA plot
+sns.scatterplot(
+    x=lda_result[:, 0], y=np.zeros_like(lda_result[:, 0]),
+    hue=data['Label'], palette='tab10', ax=ax[1], alpha=0.7
+)
+ax[1].set_title("LDA Scatter Plot")
+ax[1].set_xlabel("LDA Component 1")
+ax[1].set_yticks([])
+
+plt.tight_layout()
+plt.show()
