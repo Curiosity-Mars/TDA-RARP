@@ -1,0 +1,82 @@
+# Import required libraries
+import pandas as pd
+import numpy as np
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# ---------------------------------------
+# Function: Feature Engineering from PSA Time-Series
+# ---------------------------------------
+def preprocess_psa_data(data):
+    """
+    Generate derived features from longitudinal PSA measurements:
+    - Raw PSA values
+    - Relative changes (delta%) between adjacent timepoints
+    - Maximum / minimum PSA ratio
+    """
+
+    psa_columns = ['M1', 'M3', 'M6', 'M9', 'M12', 'M15', 'M18', 'M24', 'M30', 'M36']
+    psa_raw = data[psa_columns].values
+
+    # Compute relative changes between each adjacent timepoint
+    psa_changes = np.zeros((len(data), len(psa_columns) - 1))
+    for i in range(len(psa_columns) - 1):
+        psa_changes[:, i] = (psa_raw[:, i + 1] - psa_raw[:, i]) / psa_raw[:, i]
+
+    # Compute max/min PSA ratio for each patient
+    psa_max_min_ratio = psa_raw.max(axis=1) / psa_raw.min(axis=1)
+
+    # Combine features: raw + change + ratio
+    combined_features = np.column_stack([
+        psa_raw,
+        psa_changes,
+        psa_max_min_ratio.reshape(-1, 1)
+    ])
+
+    return combined_features
+
+# ---------------------------------------
+# Function: Run LDA and Visualize
+# ---------------------------------------
+def analyze_psa_data(data):
+    """
+    Apply LDA to the processed PSA features and visualize 2D projection.
+    - Input: DataFrame with PSA values and a 'Neoadjuvant hormone therapy' column.
+    - Output: 2D LDA projection and explained ratio (if available).
+    """
+
+    # Step 1: Feature extraction
+    features = preprocess_psa_data(data)
+
+    # Step 2: Standardization
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features)
+
+    # Step 3: Apply LDA (2D projection)
+    lda = LDA(n_components=2)
+    lda_result = lda.fit_transform(features_scaled, data['Neoadjuvant hormone therapy'])
+
+    # Step 4: Visualization
+    plt.figure(figsize=(10, 6))
+    scatter = plt.scatter(
+        lda_result[:, 0], lda_result[:, 1],
+        c=data['Neoadjuvant hormone therapy'],
+        cmap='coolwarm', alpha=0.7, edgecolor='k'
+    )
+    plt.colorbar(scatter, label='Neoadjuvant Hormone Therapy (0=No, 1=Yes)')
+    plt.title("LDA Projection of PSA Dynamics")
+    plt.xlabel("LDA Component 1")
+    plt.ylabel("LDA Component 2")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+    # Note: scikit-learn LDA does not provide explained_ratio_ by default
+    return lda_result  # Optionally return LDA object if needed
+
+# ---------------------------------------
+# Example usage:
+# df = pd.read_csv("your_psa_data.csv")
+# lda_projection = analyze_psa_data(df)
