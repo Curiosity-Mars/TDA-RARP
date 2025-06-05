@@ -1,0 +1,88 @@
+# Required libraries
+import pandas as pd
+import numpy as np
+import networkx as nx
+from sklearn.metrics.pairwise import cosine_similarity
+from community import community_louvain
+import matplotlib.pyplot as plt
+from google.colab import files
+from io import StringIO
+
+# Upload CSV file in Google Colab
+print("Please upload your CSV file containing patient QOL data:")
+uploaded = files.upload()
+
+# Load the uploaded CSV file
+for filename in uploaded.keys():
+    data = pd.read_csv(StringIO(uploaded[filename].decode('utf-8')))
+
+# Select columns that contain "EPIC" or "QOL" in the column name
+qol_columns = [col for col in data.columns if 'EPIC' in col or 'QOL' in col]
+
+# Check for presence of patient ID column
+id_column = '症例番号'  # Rename this to 'Patient_ID' if your file uses an English header
+
+if id_column not in data.columns:
+    print(f"Error: The column '{id_column}' (patient ID) was not found in the dataset.")
+else:
+    try:
+        # Set patient ID as index
+        data = data.set_index(id_column)
+
+        # Extract QOL-related data and handle missing values
+        qol_data = data[qol_columns]
+        qol_data = qol_data.apply(pd.to_numeric, errors='coerce')  # Convert to numeric
+        qol_data = qol_data.fillna(qol_data.mean())  # Impute missing values with column mean
+
+        # Compute cosine similarity between patients
+        similarity_matrix = cosine_similarity(qol_data)
+
+        # Create a similarity graph
+        G = nx.Graph()
+        for i, case_id in enumerate(qol_data.index):
+            G.add_node(case_id)
+
+        # Set similarity threshold for edges
+        threshold = 0.6
+        for i in range(len(qol_data)):
+            for j in range(i + 1, len(qol_data)):
+                if similarity_matrix[i, j] > threshold:
+                    G.add_edge(qol_data.index[i], qol_data.index[j], weight=similarity_matrix[i, j])
+
+        # Remove isolated nodes (patients with no similar peers)
+        isolated_nodes = list(nx.isolates(G))
+        G.remove_nodes_from(isolated_nodes)
+
+        # Apply Louvain community detection
+        partition = community_louvain.best_partition(G)
+        nx.set_node_attributes(G, partition, "community")
+
+        # Set node sizes proportional to degree
+        max_degree = max(dict(G.degree()).values())
+        node_sizes = [300 + 300 * (G.degree(node) / max_degree) for node in G.nodes()]
+
+        # Layout and plot the network
+        pos = nx.spring_layout(G, seed=42)
+        plt.figure(figsize=(14, 14))
+        nx.draw_networkx_nodes(G, pos, node_size=node_sizes, cmap=plt.cm.Set1,
+                               node_color=list(partition.values()))
+        nx.draw_networkx_edges(G, pos, alpha=0.2, edge_color='gray', width=1)
+        plt.title("Patient Similarity Network with Central Clusters (Threshold = 0.6)")
+        plt.axis('off')
+        plt.show()
+
+        # Save the community assignment to CSV
+        community_df = pd.DataFrame({
+            id_column: list(partition.keys()),
+            'Community': list(partition.values())
+        })
+
+        output_filename = "qol_community_data_central.csv"
+        community_df.to_csv(output_filename, index=False)
+        print(f"\nResult CSV file has been generated: {output_filename}")
+
+        # Download the file in Colab
+        files.download(output_filename)
+
+    except Exception as e:
+        print(f"An error occurred during processing: {e}")
