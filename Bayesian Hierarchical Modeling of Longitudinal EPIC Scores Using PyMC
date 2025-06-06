@@ -1,0 +1,95 @@
+# Import required libraries
+import pandas as pd
+import pymc as pm
+import arviz as az
+import matplotlib.pyplot as plt
+from google.colab import files
+
+# -------------------------------
+# Step 1: Upload CSV file
+# -------------------------------
+print("Please upload your CSV file containing longitudinal EPIC scores.")
+uploaded = files.upload()
+file_name = list(uploaded.keys())[0]
+
+# -------------------------------
+# Step 2: Load and reshape data
+# -------------------------------
+data = pd.read_csv(file_name)
+
+# Define timepoint columns
+time_columns = ["0M", "1M", "3M", "6M", "9M", "12M", "15M", "18M", "24M", "30M", "36M"]
+
+# Reshape to long format
+long_data = pd.melt(
+    data,
+    id_vars=["Patients Number"],
+    value_vars=time_columns,
+    var_name="Time",
+    value_name="EPIC_Score"
+)
+
+# Convert time to numeric (e.g., "6M" → 6)
+long_data["Time"] = long_data["Time"].str.extract(r"(\d+)").astype(int)
+
+# Convert EPIC score to numeric, fill missing with 0
+long_data["EPIC_Score"] = pd.to_numeric(long_data["EPIC_Score"], errors="coerce").fillna(0)
+
+# Encode patient IDs as integer indices
+unique_patients = long_data["Patients Number"].unique()
+patient_index_map = {pid: idx for idx, pid in enumerate(unique_patients)}
+long_data["Patient_Index"] = long_data["Patients Number"].map(patient_index_map)
+
+# -------------------------------
+# Step 3: Define and run Bayesian model
+# -------------------------------
+with pm.Model() as model:
+    # Fixed effect for time
+    beta_time = pm.Normal("beta_time", mu=0, sigma=10)
+
+    # Random effect for each patient
+    num_patients = len(unique_patients)
+    patient_effect = pm.Normal("patient_effect", mu=0, sigma=10, shape=num_patients)
+
+    # Observation noise
+    sigma_epic = pm.HalfNormal("sigma_epic", sigma=10)
+
+    # Linear model: μ = β_time * time + patient-specific effect
+    mu = beta_time * long_data["Time"].values + patient_effect[long_data["Patient_Index"].values]
+
+    # Likelihood
+    epic_obs = pm.Normal("epic_obs", mu=mu, sigma=sigma_epic, observed=long_data["EPIC_Score"].values)
+
+    # Posterior sampling
+    trace = pm.sample(1000, tune=500, chains=2, target_accept=0.9, return_inferencedata=True)
+
+# -------------------------------
+# Step 4: Summarize and visualize results
+# -------------------------------
+# Summary of posterior estimates
+summary = az.summary(trace, hdi_prob=0.95)
+print(summary)
+
+# Trace plots
+az.plot_trace(trace)
+plt.tight_layout()
+plt.show()
+
+# Predictive mean EPIC values over time (mean posterior predictive not sampled in PyMC v4 directly)
+time_values = long_data["Time"].values
+predicted_mu = (
+    trace.posterior["beta_time"].mean().values * time_values +
+    trace.posterior["patient_effect"].mean(axis=(0, 1)).values[long_data["Patient_Index"]]
+)
+
+# Visualization
+plt.figure(figsize=(10, 6))
+plt.scatter(time_values, long_data["EPIC_Score"], alpha=0.5, label="Observed EPIC Score")
+plt.plot(time_values, predicted_mu, 'r.', label="Predicted Mean (μ)")
+plt.xlabel("Time (Months)")
+plt.ylabel("EPIC Score")
+plt.title("Bayesian EPIC Score Trajectory Over Time")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
