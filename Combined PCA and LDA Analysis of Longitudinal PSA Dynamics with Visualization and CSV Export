@@ -1,0 +1,101 @@
+# Import necessary libraries
+import pandas as pd
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+from google.colab import files
+import io
+
+# -----------------------------------
+# Function: Upload and load CSV file
+# -----------------------------------
+def upload_and_read_data():
+    print("Please upload your CSV file.")
+    uploaded = files.upload()
+    file_name = list(uploaded.keys())[0]
+    data = pd.read_csv(io.BytesIO(uploaded[file_name]))
+    return data
+
+# -----------------------------------
+# Function: Analyze PSA data using PCA and LDA
+# -----------------------------------
+def analyze_psa_data(data):
+    # Define PSA columns
+    psa_columns = ['M1', 'M3', 'M6', 'M9', 'M12', 'M15', 'M18', 'M24', 'M30', 'M36']
+
+    # Convert PSA columns to numeric (removing commas if present)
+    for col in psa_columns:
+        data[col] = pd.to_numeric(data[col].astype(str).str.replace(',', ''), errors='coerce')
+
+    # Drop rows with missing values in key columns
+    data = data.dropna(subset=psa_columns + ['Neoadjuvant hormone therapy'])
+
+    # Extract features and labels
+    features = data[psa_columns]
+    labels = pd.to_numeric(data['Neoadjuvant hormone therapy'], errors='coerce')
+
+    # Standardize features
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features)
+
+    # Perform PCA
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(features_scaled)
+
+    # Perform LDA (1D for binary classification)
+    lda = LDA(n_components=1)
+    lda_result = lda.fit_transform(features_scaled, labels)
+
+    # Plotting
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+    # PCA Scatter Plot
+    scatter1 = ax1.scatter(pca_result[:, 0], pca_result[:, 1],
+                           c=labels, cmap='coolwarm', alpha=0.6)
+    ax1.set_title("PCA Scatter Plot (PSA and Neoadjuvant Therapy)")
+    ax1.set_xlabel("Principal Component 1")
+    ax1.set_ylabel("Principal Component 2")
+    plt.colorbar(scatter1, ax=ax1, label="Neoadjuvant (0=No, 1=Yes)")
+
+    # LDA Projection (1D)
+    scatter2 = ax2.scatter(lda_result, np.zeros_like(lda_result),
+                           c=labels, cmap='coolwarm', alpha=0.6)
+    ax2.set_title("LDA Projection (PSA and Neoadjuvant Therapy)")
+    ax2.set_xlabel("LDA Component 1")
+    ax2.set_yticks([])
+    plt.colorbar(scatter2, ax=ax2, label="Neoadjuvant (0=No, 1=Yes)")
+
+    plt.tight_layout()
+    plt.show()
+
+    # Save results to CSV
+    results = pd.DataFrame({
+        'PCA1': pca_result[:, 0],
+        'PCA2': pca_result[:, 1],
+        'LDA': lda_result.flatten(),
+        'Neoadjuvant': labels
+    })
+    output_file = 'PSA_Analysis_Results.csv'
+    results.to_csv(output_file, index=False)
+    print(f"\nResults saved to '{output_file}'.")
+    files.download(output_file)
+
+    return pca_result, lda_result, pca.explained_variance_ratio_
+
+# -----------------------------------
+# Main Execution
+# -----------------------------------
+def main():
+    data = upload_and_read_data()
+    try:
+        pca_result, lda_result, explained_ratio = analyze_psa_data(data)
+        print("\nPCA Explained Variance Ratio:", explained_ratio)
+        print("Analysis completed successfully.")
+    except Exception as e:
+        print(f"\nAn error occurred: {str(e)}")
+        print("Please ensure your CSV file format is correct.")
+
+if __name__ == "__main__":
+    main()
