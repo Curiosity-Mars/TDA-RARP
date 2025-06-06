@@ -1,0 +1,126 @@
+# Import required libraries
+import pandas as pd
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+from google.colab import files
+import io
+
+# -------------------------------
+# Function: Upload and Read CSV
+# -------------------------------
+def upload_and_read_data():
+    print("Please upload your CSV file.")
+    uploaded = files.upload()
+    file_name = list(uploaded.keys())[0]
+    data = pd.read_csv(io.BytesIO(uploaded[file_name]))
+    return data
+
+# -------------------------------
+# Function: Calculate PSA Rate Changes
+# -------------------------------
+def calculate_psa_rates(data):
+    psa_columns = ['M1', 'M3', 'M6', 'M9', 'M12', 'M15', 'M18', 'M24', 'M30', 'M36']
+
+    # Convert to numeric (remove commas if needed)
+    for col in psa_columns:
+        data[col] = pd.to_numeric(data[col].astype(str).str.replace(',', ''), errors='coerce')
+
+    rates = []
+    rate_names = []
+
+    # Rate of change between adjacent timepoints
+    for i in range(len(psa_columns) - 1):
+        current = data[psa_columns[i + 1]]
+        previous = data[psa_columns[i]]
+        rate = ((current - previous) / previous) * 100
+        rate = np.nan_to_num(rate, nan=0, posinf=0, neginf=0)
+        rates.append(rate)
+        rate_names.append(f'Rate_{psa_columns[i + 1]}')
+
+    # Rate of change from baseline (M1)
+    for i in range(1, len(psa_columns)):
+        current = data[psa_columns[i]]
+        baseline = data[psa_columns[0]]
+        rate = ((current - baseline) / baseline) * 100
+        rate = np.nan_to_num(rate, nan=0, posinf=0, neginf=0)
+        rates.append(rate)
+        rate_names.append(f'Total_Rate_{psa_columns[i]}')
+
+    # Create DataFrame
+    rates_df = pd.DataFrame(np.array(rates).T, columns=rate_names)
+    return rates_df
+
+# -------------------------------
+# Function: Analyze and Visualize
+# -------------------------------
+def analyze_psa_rates(data):
+    # Drop rows with missing treatment labels
+    data = data.dropna(subset=['Neoadjuvant hormone therapy'])
+
+    # Compute derived features (PSA rate changes)
+    rates_df = calculate_psa_rates(data)
+
+    # Standardize features
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(rates_df)
+
+    # PCA
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(features_scaled)
+
+    # LDA
+    lda = LDA(n_components=1)
+    lda_result = lda.fit_transform(features_scaled, data['Neoadjuvant hormone therapy'])
+
+    # Plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+    # PCA Plot
+    scatter1 = ax1.scatter(pca_result[:, 0], pca_result[:, 1],
+                           c=data['Neoadjuvant hormone therapy'], cmap='coolwarm', alpha=0.6)
+    ax1.set_title("PCA of PSA Rate Changes")
+    ax1.set_xlabel("Principal Component 1")
+    ax1.set_ylabel("Principal Component 2")
+    plt.colorbar(scatter1, ax=ax1, label='Neoadjuvant Therapy (0=No, 1=Yes)')
+
+    # LDA Plot
+    scatter2 = ax2.scatter(lda_result, np.zeros_like(lda_result),
+                           c=data['Neoadjuvant hormone therapy'], cmap='coolwarm', alpha=0.6)
+    ax2.set_title("LDA of PSA Rate Changes")
+    ax2.set_xlabel("LDA Component 1")
+    ax2.set_yticks([])
+    plt.colorbar(scatter2, ax=ax2, label='Neoadjuvant Therapy (0=No, 1=Yes)')
+
+    plt.tight_layout()
+    plt.show()
+
+    # Summary
+    print("\n===== Analysis Summary =====")
+    print(f"Number of patients analyzed: {len(data)}")
+    print(f"Neoadjuvant therapy: {sum(data['Neoadjuvant hormone therapy'] == 1)}")
+    print(f"No neoadjuvant therapy: {sum(data['Neoadjuvant hormone therapy'] == 0)}")
+    print(f"\nPCA Explained Variance Ratio: {pca.explained_variance_ratio_}")
+
+    return pca_result, lda_result, rates_df
+
+# -------------------------------
+# Main Execution
+# -------------------------------
+def main():
+    try:
+        data = upload_and_read_data()
+        pca_result, lda_result, rates_df = analyze_psa_rates(data)
+
+        # Print descriptive statistics
+        print("\n===== Descriptive Stats of PSA Rate Features =====")
+        print(rates_df.describe())
+
+    except Exception as e:
+        print(f"\nAn error occurred: {str(e)}")
+        print("Please check your CSV format and content.")
+
+if __name__ == "__main__":
+    main()
