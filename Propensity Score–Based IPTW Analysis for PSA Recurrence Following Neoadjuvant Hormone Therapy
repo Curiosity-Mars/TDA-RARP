@@ -1,0 +1,91 @@
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+from google.colab import files
+
+# -----------------------------
+# Upload and read CSV data
+# -----------------------------
+print("Please upload your CSV file.")
+uploaded = files.upload()
+filename = list(uploaded.keys())[0]
+df = pd.read_csv(filename)
+
+# -----------------------------
+# Preprocess PSA values
+# -----------------------------
+psa_columns = ['PSA POM1', 'PSA POM3', 'PSA POM6', 'PSA POM9', 'PSA POM12']
+for col in psa_columns:
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+# Define PSA recurrence (>= 0.2 ng/mL at any timepoint)
+df['PSA_recurrence'] = np.where(
+    df[psa_columns].ge(0.2).any(axis=1), 'Recurrence', 'No Recurrence'
+)
+
+# Display recurrence counts by hormone therapy group
+df_recurrence = df.groupby(['Neoadjuvant hormone therapy', 'PSA_recurrence'])['Age']\
+                   .count().reset_index(name='count')
+print(df_recurrence.to_markdown(index=False))
+
+# -----------------------------
+# Convert clinical variables
+# -----------------------------
+df['hormone_therapy'] = np.where(df['Neoadjuvant hormone therapy'] == 1, 'Yes', 'No')
+df['Biopsy GS A+B'] = pd.to_numeric(df['Biopsy GS A+B'], errors='coerce')
+df['Clinical Stage (cT)'] = df['Clinical Stage (cT)'].astype(str).str.replace(r'[a-zA-Z]', '', regex=True)
+df['Clinical Stage (cT)'] = pd.to_numeric(df['Clinical Stage (cT)'], errors='coerce')
+
+# -----------------------------
+# Propensity Score with IPTW
+# -----------------------------
+def propensity_score_analysis(df, covariates):
+    df = df.copy()
+    for col in covariates:
+        if df[col].dtype == 'object':
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    df = df.dropna(subset=covariates)
+    X = sm.add_constant(df[covariates])
+    model = sm.Logit(df['Neoadjuvant hormone therapy'], X).fit()
+    df['Propensity_score'] = model.predict(X)
+
+    # Calculate IPTW
+    df['IPTW'] = np.where(
+        df['Neoadjuvant hormone therapy'] == 1,
+        1 / df['Propensity_score'],
+        1 / (1 - df['Propensity_score'])
+    )
+
+    # Weighted recurrence rates
+    treated = df[df['Neoadjuvant hormone therapy'] == 1]
+    control = df[df['Neoadjuvant hormone therapy'] == 0]
+
+    rate_treated = treated['PSA_recurrence'].value_counts(normalize=True).get('Recurrence', 0) * treated['IPTW'].mean()
+    rate_control = control['PSA_recurrence'].value_counts(normalize=True).get('Recurrence', 0) * control['IPTW'].mean()
+
+    return rate_treated - rate_control
+
+# -----------------------------
+# Run analysis with 3 covariate sets
+# -----------------------------
+covariate_sets = {
+    'Set 1': ['Age', 'BMI', 'Prostate vol.', 'iPSA', 'Biopsy GS A+B', 'Clinical Stage (cT)'],
+    'Set 2': ['Age', 'BMI', 'iPSA'],
+    'Set 3': ['Prostate vol.', 'Biopsy GS A+B', 'Clinical Stage (cT)']
+}
+
+for name, covs in covariate_sets.items():
+    diff = propensity_score_analysis(df.copy(), covs)
+    print(f"{name}: Estimated PSA recurrence rate difference = {diff:.3f}")
+
+# -----------------------------
+# Bootstrap confidence intervals
+# -----------------------------
+def bootstrap_psa_diff(df, covariates, n=1000):
+    estimates = [propensity_score_analysis(df.sample(frac=1, replace=True), covariates) for _ in range(n)]
+    return np.percentile(estimates, [2.5, 97.5])
+
+for name, covs in covariate_sets.items():
+    lower, upper = bootstrap_psa_diff(df.copy(), covs)
+    print(f"{name}: 95% CI = [{lower:.3f}, {upper:.3f}]")
