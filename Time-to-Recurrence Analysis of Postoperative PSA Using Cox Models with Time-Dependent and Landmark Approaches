@@ -1,0 +1,68 @@
+import pandas as pd
+import numpy as np
+from lifelines import CoxPHFitter
+from lifelines.utils import to_long_format
+import matplotlib.pyplot as plt
+
+# === Step 1: Load CSV ===
+filename = 'your_input_file.csv'  # ← 適宜変更
+df = pd.read_csv(filename)
+
+# === Step 2: Convert PSA columns to numeric ===
+psa_columns = [f'PSA POM{i}' for i in [1, 3, 6, 9, 12, 15, 18, 24, 30, 36, 48, 60, 72, 84, 96, 108, 120]]
+for col in psa_columns:
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+# === Step 3: Melt to long format for survival modeling ===
+df_long = df.melt(
+    id_vars=['Age', 'Neoadjuvant hormone therapy'],
+    value_vars=psa_columns,
+    var_name='PSA_POM',
+    value_name='PSA_value'
+)
+df_long['PSA_POM'] = df_long['PSA_POM'].str.extract(r'(\d+)').astype(int)
+df_long['PSA_recurrence'] = (df_long['PSA_value'] >= 0.2).astype(int)
+
+# === Step 4: Aggregate by patient to get time-to-event and event indicator ===
+df_long = df_long.groupby(['Age', 'Neoadjuvant hormone therapy']).agg({
+    'PSA_POM': 'min',
+    'PSA_recurrence': 'max'
+}).reset_index()
+df_long.rename(columns={'PSA_POM': 'time_to_recurrence'}, inplace=True)
+
+# === Step 5: Landmark Analyses ===
+for landmark in [6, 12]:
+    df_landmark = df_long[df_long['time_to_recurrence'] > landmark]
+    if not df_landmark.empty:
+        cph = CoxPHFitter()
+        cph.fit(df_landmark, duration_col='time_to_recurrence', event_col='PSA_recurrence')
+        print(f'\n--- Landmark Cox Model (> {landmark} months) ---')
+        cph.print_summary()
+
+# === Step 6: Time-Varying Coefficient Approximation ===
+df_tv = to_long_format(df_long, duration_col='time_to_recurrence')
+df_tv['time_varying_hormone'] = df_tv['Neoadjuvant hormone therapy'] * df_tv['stop']
+cph = CoxPHFitter()
+cph.fit(df_tv[['time_varying_hormone', 'Age', 'start', 'stop', 'PSA_recurrence']],
+        duration_col='start', event_col='PSA_recurrence', entry_col='stop')
+print('\n--- Time-Varying Coefficient Model ---')
+cph.print_summary()
+
+# === Step 7: Stratified Cox Analyses ===
+df_early = df_long[df_long['time_to_recurrence'] <= 60]
+if not df_early.empty:
+    cph = CoxPHFitter()
+    cph.fit(df_early, duration_col='time_to_recurrence', event_col='PSA_recurrence')
+    print('\n--- Stratified Cox Model: Early (≤60 months) ---')
+    cph.print_summary()
+
+df_late = df_long[df_long['time_to_recurrence'] > 60]
+if not df_late.empty:
+    cph = CoxPHFitter()
+    cph.fit(df_late, duration_col='time_to_recurrence', event_col='PSA_recurrence')
+    print('\n--- Stratified Cox Model: Late (>60 months) ---')
+    cph.print_summary()
+
+# === Step 8: Export Result ===
+df_long.to_csv("time_dependent_effects_analysis_results.csv", index=False)
+print("Saved results to 'time_dependent_effects_analysis_results.csv'")
