@@ -1,0 +1,128 @@
+# ==============================
+# Figure 1 Implementation: TDA Framework
+# ==============================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+import pymc as pm
+import arviz as az
+from google.colab import files
+import io
+
+# ---------------------------------------
+# Step 1: Upload and Load the Data
+# ---------------------------------------
+def upload_and_read_data():
+    print("Upload the CSV file containing PSA or QOL longitudinal data.")
+    uploaded = files.upload()
+    file_name = list(uploaded.keys())[0]
+    return pd.read_csv(io.BytesIO(uploaded[file_name]))
+
+# ---------------------------------------
+# Step 2: Preprocess Time-Series to Rate Matrix
+# (See: calculate_psa_rates)
+# ---------------------------------------
+def calculate_rate_matrix(data, timepoints):
+    rates = []
+    rate_names = []
+    for i in range(len(timepoints) - 1):
+        rate = ((data[timepoints[i+1]] - data[timepoints[i]]) / data[timepoints[i]]) * 100
+        rate = np.nan_to_num(rate, nan=0, posinf=0, neginf=0)
+        rates.append(rate)
+        rate_names.append(f'Rate_{timepoints[i+1]}')
+    return pd.DataFrame(np.array(rates).T, columns=rate_names)
+
+# ---------------------------------------
+# Step 3: PCA + LDA for Group Visualization
+# (See: analyze_psa_rates / analyze_psa_data)
+# ---------------------------------------
+def run_pca_lda(features, labels):
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features)
+
+    # PCA
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(features_scaled)
+
+    # LDA
+    lda = LDA(n_components=1)
+    lda_result = lda.fit_transform(features_scaled, labels)
+
+    # Plot
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    axes[0].scatter(pca_result[:, 0], pca_result[:, 1], c=labels, cmap='coolwarm', alpha=0.6)
+    axes[0].set_title("PCA Projection")
+    axes[0].set_xlabel("PC1")
+    axes[0].set_ylabel("PC2")
+
+    axes[1].scatter(lda_result, np.zeros_like(lda_result), c=labels, cmap='coolwarm', alpha=0.6)
+    axes[1].set_title("LDA Projection")
+    axes[1].set_xlabel("LDA1")
+    axes[1].set_yticks([])
+
+    plt.tight_layout()
+    plt.show()
+
+# ---------------------------------------
+# Step 4: Bayesian Hierarchical Model
+# (See: Bayesian model for EPIC scores or PSA trajectories)
+# ---------------------------------------
+def run_bayesian_model(long_data):
+    with pm.Model() as model:
+        beta_time = pm.Normal("beta_time", mu=0, sigma=10)
+        patient_effect = pm.Normal("patient_effect", mu=0, sigma=10, shape=long_data["Patient_Index"].nunique())
+        sigma = pm.HalfNormal("sigma", sigma=10)
+
+        mu = beta_time * long_data["Time"].values + patient_effect[long_data["Patient_Index"].values]
+        pm.Normal("obs", mu=mu, sigma=sigma, observed=long_data["Score"].values)
+
+        trace = pm.sample(1000, tune=500, chains=2, return_inferencedata=True)
+
+    az.plot_trace(trace)
+    plt.tight_layout()
+    plt.show()
+
+    return trace
+
+# ---------------------------------------
+# Example Usage for Figure 1 (PSA)
+# ---------------------------------------
+def main():
+    # Load data (PSA or EPIC)
+    data = upload_and_read_data()
+    timepoints = ['M1', 'M3', 'M6', 'M9', 'M12', 'M15', 'M18', 'M24', 'M30', 'M36']
+
+    # Calculate rate matrix (or use raw PSA values)
+    rates_df = calculate_rate_matrix(data, timepoints)
+
+    # Extract labels (e.g., Neoadjuvant hormone therapy)
+    labels = pd.to_numeric(data['Neoadjuvant hormone therapy'], errors='coerce')
+
+    # PCA + LDA for community visualization
+    run_pca_lda(rates_df, labels)
+
+    # For longitudinal modeling (e.g., EPIC scores)
+    # Reshape to long format
+    long_data = pd.melt(
+        data,
+        id_vars=["Patients Number"],
+        value_vars=['0M', '1M', '3M', '6M', '9M', '12M', '15M', '18M', '24M', '30M', '36M'],
+        var_name="Time",
+        value_name="Score"
+    )
+    long_data["Time"] = long_data["Time"].str.extract(r"(\d+)").astype(int)
+    long_data["Score"] = pd.to_numeric(long_data["Score"], errors="coerce").fillna(0)
+
+    patient_ids = long_data["Patients Number"].unique()
+    index_map = {pid: i for i, pid in enumerate(patient_ids)}
+    long_data["Patient_Index"] = long_data["Patients Number"].map(index_map)
+
+    # Bayesian longitudinal modeling
+    run_bayesian_model(long_data)
+
+if __name__ == "__main__":
+    main()
