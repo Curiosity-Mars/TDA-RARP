@@ -1,0 +1,101 @@
+import pandas as pd
+import numpy as np
+import pymc as pm
+import arviz as az
+import matplotlib.pyplot as plt
+import networkx as nx
+from sklearn.metrics.pairwise import cosine_similarity
+from community import community_louvain
+from google.colab import files
+from io import BytesIO
+
+# Step 1: Upload and read CSV file
+def upload_and_read_data():
+    print("Please upload your CSV file (PSA or QOL data):")
+    uploaded = files.upload()
+    file_name = list(uploaded.keys())[0]
+    df = pd.read_csv(BytesIO(uploaded[file_name]))
+    return df
+
+# Step 2: Convert wide to long format
+def to_long_format(df, value_name):
+    time_cols = ["0M", "1M", "3M", "6M", "9M", "12M", "15M", "18M", "24M", "30M", "36M"]
+    long_df = pd.melt(df, id_vars=["Patients Number"], value_vars=time_cols,
+                      var_name="Time", value_name=value_name)
+    long_df["Time"] = long_df["Time"].str.extract(r"(\d+)").astype(int)
+    long_df[value_name] = pd.to_numeric(long_df[value_name], errors="coerce").fillna(0)
+    long_df["Patient Index"] = long_df["Patients Number"].astype("category").cat.codes
+    return long_df
+
+# Step 3: Fit hierarchical Bayesian model
+def run_bayesian_model(long_df, value_col, label):
+    with pm.Model() as model:
+        beta_time = pm.Normal("beta_time", mu=0, sigma=10)
+        patient_effect = pm.Normal("patient_effect", mu=0, sigma=10,
+                                   shape=len(long_df["Patient Index"].unique()))
+        sigma = pm.HalfNormal("sigma", sigma=10)
+        mu = beta_time * long_df["Time"].values + patient_effect[long_df["Patient Index"].values]
+        obs = pm.Normal("obs", mu=mu, sigma=sigma, observed=long_df[value_col].values)
+        trace = pm.sample(1000, tune=500, chains=2, return_inferencedata=True)
+    az.plot_trace(trace)
+    plt.suptitle(f"Bayesian Trace Plot: {label}", fontsize=16)
+    plt.show()
+    return trace
+
+# Step 4: Similarity network and Louvain clustering
+def run_louvain(df, label):
+    time_cols = ["0M", "1M", "3M", "6M", "9M", "12M", "15M", "18M", "24M", "30M", "36M"]
+    mat = df[time_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+    similarity = cosine_similarity(mat)
+
+    G = nx.Graph()
+    for i in range(len(df)):
+        G.add_node(df["Patients Number"][i])
+
+    threshold = 0.6
+    for i in range(len(df)):
+        for j in range(i + 1, len(df)):
+            if similarity[i, j] > threshold:
+                G.add_edge(df["Patients Number"][i], df["Patients Number"][j], weight=similarity[i, j])
+    G.remove_nodes_from(list(nx.isolates(G)))
+
+    partition = community_louvain.best_partition(G)
+    nx.set_node_attributes(G, partition, "community")
+
+    # Network plot
+    pos = nx.spring_layout(G)
+    plt.figure(figsize=(12, 12))
+    nx.draw_networkx_nodes(G, pos, node_color=list(partition.values()),
+                           cmap=plt.cm.Set1, node_size=300)
+    nx.draw_networkx_edges(G, pos, alpha=0.2)
+    plt.title(f"{label} Network with Louvain Clustering", fontsize=14)
+    plt.axis('off')
+    plt.show()
+
+    # Save communities
+    comm_df = pd.DataFrame({
+        "Patients Number": list(partition.keys()),
+        "Community": list(partition.values())
+    })
+    filename = f"{label}_Communities.csv"
+    comm_df.to_csv(filename, index=False)
+    files.download(filename)
+    return comm_df
+
+# Step 5: Main execution
+def main():
+    df = upload_and_read_data()
+
+    if "EPIC" not in df.columns:
+        # Run for PSA
+        long_psa = to_long_format(df, value_name="PSA")
+        trace_psa = run_bayesian_model(long_psa, value_col="PSA", label="PSA")
+        run_louvain(df, label="PSA")
+    else:
+        # Run for QOL (EPIC)
+        long_qol = to_long_format(df.rename(columns={"EPIC": "0M"}), value_name="EPIC")
+        trace_qol = run_bayesian_model(long_qol, value_col="EPIC", label="QOL (EPIC)")
+        run_louvain(df.rename(columns={"EPIC": "0M"}), label="QOL")
+
+if __name__ == "__main__":
+    main()
